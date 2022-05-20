@@ -25,6 +25,10 @@ RUN apt -y install vim sudo less bash-completion wget gnupg python python3-pip j
     echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -cs`-pgdg main" | tee  /etc/apt/sources.list.d/pgdg.list
 RUN apt update && apt install -y postgresql postgresql-client libpq-dev
 
+ENV TINI_VERSION v0.19.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN chmod +x /tini
+
 RUN useradd -ms /usr/bin/bash work && \
     usermod -aG sudo work
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
@@ -40,3 +44,5 @@ USER work
 RUN pip install symbiont-io.pytest-assembly
 
 WORKDIR /home/work
+
+ENTRYPOINT ["/tini", "--"]

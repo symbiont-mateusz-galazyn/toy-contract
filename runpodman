@@ -19,12 +19,10 @@ containerName = "assembly-sdk"
 
 main :: IO ()
 main = getArgs >>= \case
-  [] -> putStrLn "available arguments: buildimage runcontainer connectcontainer" >> exitFailure
-
   ["buildimage"] -> run $ do
     podman "build" "-t" imageName "."
 
-  ["runcontainer"] -> run $ do
+  ["start"] -> run $ do
     pwdE <- liftIO $ getEnv "PWD"
     displayE <- liftIO $ getEnv "DISPLAY"
     xhost "+" -- FIXME this is insecure
@@ -38,10 +36,23 @@ main = getArgs >>= \case
         "-e" ("DISPLAY=" <> displayE)
         "-p" "8880-8890:8880-8890"
         imageName
-        "/usr/bin/tail -f /dev/null"
-    -- generate keys
+        "/usr/bin/tail" "-f" "/dev/null"
+    -- FIXME doesn't work
+    -- podman "exec" "-it" containerName "sym" "local-network" "stop"
+    -- podman "exec" "-it" containerName "sym" "local-network" "start"
+    -- podman "exec" "-it" containerName "sym" "network" "create-ka"
 
-  ["connectcontainer"] -> run $ do
+
+  ["stop"] -> run $ do
+    podman "exec" "-it" containerName "sym" "local-network" "stop"
+    podman "rm" "-f" containerName
+
+  ["shell"] -> run $ do
     podman "exec" "-it" containerName "/bin/bash"
+
+  ["dashboard"] -> run $ do
+    podman "exec" "-it" containerName "sym-dash"
+
+  _ -> putStrLn "available arguments: buildimage start stop shell dashboard" >> exitFailure
 
 -- vim: set filetype=haskell:
