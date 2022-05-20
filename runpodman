@@ -1,0 +1,47 @@
+#!/usr/bin/env stack
+{- stack
+script
+--resolver nightly-2022-05-18
+--package shell-conduit
+-}
+{-# LANGUAGE LambdaCase #-}
+
+import Data.Conduit.Shell
+import System.Environment
+import Control.Monad.IO.Class (liftIO)
+import System.Exit (exitFailure)
+
+imageName :: String
+imageName = "symbiont-assembly-sdk"
+
+containerName :: String
+containerName = "assembly-sdk"
+
+main :: IO ()
+main = getArgs >>= \case
+  [] -> putStrLn "available arguments: buildimage runcontainer connectcontainer" >> exitFailure
+
+  ["buildimage"] -> run $ do
+    podman "build" "-t" imageName "."
+
+  ["runcontainer"] -> run $ do
+    pwdE <- liftIO $ getEnv "PWD"
+    displayE <- liftIO $ getEnv "DISPLAY"
+    xhost "+" -- FIXME this is insecure
+    podman "run" "-d" "--rm" "-it"
+        "--name" containerName
+        "-v" "dot-symbiont:/home/work/.symbiont"
+        "-v" "assembly-sdk-dot-local:/home/work/.local"
+        "-v" (pwdE <> "/workspace:/home/work/workspace")
+        "--detach-keys=ctrl-q,ctrl-q,ctrl-q,ctrl-q,ctrl-q"
+        "-v" "/tmp/.X11-unix:/tmp/.X11-unix"
+        "-e" ("DISPLAY=" <> displayE)
+        "-p" "8880-8890:8880-8890"
+        imageName
+        "/usr/bin/tail -f /dev/null"
+    -- generate keys
+
+  ["connectcontainer"] -> run $ do
+    podman "exec" "-it" containerName "/bin/bash"
+
+-- vim: set filetype=haskell:
