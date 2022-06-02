@@ -1,7 +1,7 @@
 #!/usr/bin/env stack
 {- stack
 script
---resolver nightly-2022-05-18
+--resolver nightly-2022-05-29
 --package shell-conduit
 -}
 {-# LANGUAGE LambdaCase #-}
@@ -42,13 +42,15 @@ main = getArgs >>= \case
     -- podman "exec" "-it" containerName "sym" "local-network" "start"
     -- podman "exec" "-it" containerName "sym" "network" "create-ka"
 
-
   ["stop"] -> run $ do
     podman "exec" "-it" containerName "sym" "local-network" "stop"
     podman "rm" "-f" containerName
 
   ["shell"] -> run $ do
-    podman "exec" "-it" containerName "/bin/bash"
+    podman "exec" "-it"
+        "--detach-keys=ctrl-q,ctrl-q,ctrl-q,ctrl-q,ctrl-q"
+        containerName
+        "/bin/bash"
 
   ["dashboard"] -> run $ do
     podman "exec" "-it" containerName "sym-dash"

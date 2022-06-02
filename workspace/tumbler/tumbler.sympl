@@ -1,0 +1,52 @@
+schema Transfer:
+    id : Identifier
+    # no source means that coin was mined
+    source : Optional[KeyAlias]
+    destination : KeyAlias
+    amount : int
+
+
+@clientside
+def get_all_transfers() -> List[Transfer]:
+    return _get_all_transfers()
+
+@helper
+def _get_all_transfers() -> List[Transfer]:
+    return [row.value for row in cvm.storage.query(TransferStatic).execute()]
+
+@clientside
+def get_balance() -> int:
+    return 0
+
+@clientside
+def mine_coin(amount : int = 1) -> None:
+    check_positive(amount)
+    cvm.job_start()
+    # TODO this creates new channel every time new transaction is created
+    with PostTxArgs(cvm.new_channel("COI")):
+        _mine_coin(amount)
+
+#
+# Executable
+#
+
+@executable
+def _mine_coin(amount : int = 1) -> None:
+    check_positive(amount)
+    id = cvm.generate_id('TSF')
+    transfer = Transfer(
+        id = id, 
+        source = None, 
+        destination = cvm.tx.key_alias, 
+        amount = amount)
+    cvm.storage.put(id, transfer)
+    cvm.job_complete(std.json(transfer))
+
+
+
+@helper
+def check_positive(v :  int) -> None:
+    if v <= 0:
+        cvm.error(f'Passed non-positive value: {v}')
+
+# vi:syntax=python

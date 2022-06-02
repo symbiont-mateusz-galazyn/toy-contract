@@ -19,8 +19,12 @@ RUN apt upgrade -y && apt-get install -y locales && \
 ENV LANG en_US.utf8
 
 # Setup postgres 13 repo
-RUN apt -y install vim sudo less bash-completion wget gnupg python python3-pip jq curl git lsb-release \
+RUN apt install -y software-properties-common  && add-apt-repository ppa:deadsnakes/ppa && \
+    apt -y install vim sudo less bash-completion wget gnupg python3.10-venv jq curl git lsb-release psmisc \
       libfuse2 libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgtk-3-0 libgbm1 libx11-xcb1 && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python3 &&\
+    ln -sf /usr/bin/python3.10 /usr/bin/python &&\
+    python -m ensurepip && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - && \
     echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -cs`-pgdg main" | tee  /etc/apt/sources.list.d/pgdg.list
 RUN apt update && apt install -y postgresql postgresql-client libpq-dev
@@ -41,7 +45,7 @@ RUN echo "ln -sf /home/work/.symbiont/symenvrc /home/work/.symenvrc" >> /home/wo
 
 USER work
 
-RUN pip install symbiont-io.pytest-assembly
+RUN pip3.10 install symbiont-io.pytest-assembly symbiont-io.assembly-client
 
 WORKDIR /home/work
 
