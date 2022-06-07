@@ -5,26 +5,58 @@ schema Transfer:
     destination : KeyAlias
     amount : int
 
+#
+# Clientside
+#
 
 @clientside
 def get_all_transfers() -> List[Transfer]:
     return _get_all_transfers()
 
+@clientside
+def get_balance() -> int:
+    return _get_balance()
+
+@clientside
+def mine_coin(amount : int = 1) -> None:
+    check_positive(amount, "Cannot mine coin")
+    cvm.job_start()
+    with PostTxArgs(cvm.new_channel("COI")):
+        _mine_coin(amount)
+
+@clientside
+def send(amount : int, recipient : KeyAlias) -> None:
+    check_if_can_transfer(amount, recipient)
+    cvm.job_start()
+    with PostTxArgs(cvm.new_channel("COI")):
+        _mine_coin(amount)
+
+#
+# Helper
+#
+
 @helper
 def _get_all_transfers() -> List[Transfer]:
     return [row.value for row in cvm.storage.query(TransferStatic).execute()]
 
-@clientside
-def get_balance() -> int:
-    return 0
+@helper
+def _get_balance() -> int:
+    transfers = _get_all_transfers()
+    incoming : List[int] = [tx.amount for tx in transfers if str(tx.destination) == str(cvm.tx.key_alias)]
+    outgoing : List[int] = [tx.amount for tx in transfers if str(tx.source) == str(cvm.tx.key_alias)]
+    return sum(incoming) - sum(outgoing)
 
-@clientside
-def mine_coin(amount : int = 1) -> None:
-    check_positive(amount)
-    cvm.job_start()
-    # TODO this creates new channel every time new transaction is created
-    with PostTxArgs(cvm.new_channel("COI")):
-        _mine_coin(amount)
+@helper
+def check_positive(v : int, msg: str) -> None:
+    if v <= 0:
+        cvm.error(f'{msg} Passed non-positive value: {v}')
+
+@helper
+def check_if_can_transfer(amount : int, recipient : KeyAlias) -> None:
+    check_positive(amount, "Cannot send coin to" + str(recipient))
+    current_balance = _get_balance()
+    if current_balance < amount:
+        cvm.error("Not enough coins on source account {cvm.tx.key_alias}. Balance: {balance}")
 
 #
 # Executable
@@ -32,7 +64,7 @@ def mine_coin(amount : int = 1) -> None:
 
 @executable
 def _mine_coin(amount : int = 1) -> None:
-    check_positive(amount)
+    check_positive(amount, "Cannot mine coin")
     id = cvm.generate_id('TSF')
     transfer = Transfer(
         id = id, 
@@ -42,11 +74,18 @@ def _mine_coin(amount : int = 1) -> None:
     cvm.storage.put(id, transfer)
     cvm.job_complete(std.json(transfer))
 
+@executable
+def _send(amount : int, recipient : KeyAlias) -> None:
+    check_if_can_transfer(amount, recipient)
+    cvm.send_key(cvm.tx.write_channel, recipient)
+    id = cvm.generate_id('TSF')
+    transfer = Transfer(
+        id = id, 
+        source = cvm.tx.key_alias, 
+        destination = recipient, 
+        amount = amount)
+    cvm.storage.put(id, transfer)
+    cvm.job_complete(std.json(transfer))
 
-
-@helper
-def check_positive(v :  int) -> None:
-    if v <= 0:
-        cvm.error(f'Passed non-positive value: {v}')
 
 # vi:syntax=python

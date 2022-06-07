@@ -3,19 +3,31 @@
 script
 --resolver nightly-2022-05-29
 --package shell-conduit
+--package yaml
+--package bytestring
+--package interpolatedstring-perl6
 -}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE QuasiQuotes #-}
 
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import qualified Data.ByteString as B
 import Data.Conduit.Shell
+import GHC.Generics (Generic)
+import Data.Yaml (FromJSON, decodeFileThrow)
 import System.Environment
-import Control.Monad.IO.Class (liftIO)
 import System.Exit (exitFailure)
+import Text.InterpolatedString.Perl6 (qc)
 
 imageName :: String
 imageName = "symbiont-assembly-sdk"
 
 containerName :: String
 containerName = "assembly-sdk"
+
+contractDir :: String
+contractDir = "workspace/tumbler"
 
 main :: IO ()
 main = getArgs >>= \case
@@ -37,13 +49,12 @@ main = getArgs >>= \case
         "-p" "8880-8890:8880-8890"
         imageName
         "/usr/bin/tail" "-f" "/dev/null"
-    -- FIXME doesn't work
-    -- podman "exec" "-it" containerName "sym" "local-network" "stop"
-    -- podman "exec" "-it" containerName "sym" "local-network" "start"
-    -- podman "exec" "-it" containerName "sym" "network" "create-ka"
+    -- podman "exec" containerName "sym" "local-network" "stop"
+    podman "exec" containerName "sym" "local-network" "start"
+    createKa
 
   ["stop"] -> run $ do
-    podman "exec" "-it" containerName "sym" "local-network" "stop"
+    podman "exec" containerName "sym" "local-network" "stop"
     podman "rm" "-f" containerName
 
   ["shell"] -> run $ do
@@ -55,6 +66,48 @@ main = getArgs >>= \case
   ["dashboard"] -> run $ do
     podman "exec" "-it" containerName "sym-dash"
 
-  _ -> putStrLn "available arguments: buildimage start stop shell dashboard" >> exitFailure
+  ["create-ka"] -> run createKa
+
+  ["deploy"] -> run $ do
+    podman "exec" containerName "sym" "network" "publish-contract" "--contract-dir" contractDir
+
+  -- {{{ contract functions
+
+  ["c-mine-coin"] -> run $ callContractF "mine_coin" "{}"
+
+  ["c-get-all-transfers"] -> run $ callContractF "get_all_transfers" "{}"
+
+  ["c-get-balance"] -> run $ callContractF "get_balance" "{}"
+
+  ["c-send", recipient, amountStr] -> run $ do
+    callContractF "send" [qc| \{ "amount": {amountStr}, "recipient": "{recipient}" \}|]
+
+  -- }}}
+
+  args -> putStrLn ("unknown arguments: " <> show args) >> exitFailure
+
+
+createKa :: MonadIO m => Segment m ()
+createKa = podman "exec" containerName "sym" "network" "create-ka"
+
+callContractF :: (MonadIO m) => String -> String -> Segment m ()
+callContractF functionName arguments = do
+  keyAlias <- liftIO $ getEnv "KA"
+  ContractMeta{name, version, language} <- getContractMeta
+  podman "exec" containerName "curl" "-X" "POST" "-s" ("http://localhost:8888/api/v1/contracts/" <> name <> "/" <> (show language) <> "-" <> version <> "/" <> functionName)
+      "-H" "Content-Type: application/json"
+      "-H" ("Symbiont-Key-Alias: " <> keyAlias)
+      "-d" "{}"
+
+-- {{{ Contract Metadata
+getContractMeta :: MonadIO m => m ContractMeta
+getContractMeta = decodeFileThrow (contractDir <> "/contract.yaml")
+
+data ContractMeta = ContractMeta
+  { name :: String
+  , version :: String
+  , language :: Int
+  } deriving (Show, Generic, FromJSON)
+-- }}}
 
 -- vim: set filetype=haskell:
