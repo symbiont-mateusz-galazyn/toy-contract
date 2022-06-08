@@ -19,17 +19,15 @@ def get_balance() -> int:
 
 @clientside
 def mine_coin(amount : int = 1) -> None:
-    check_positive(amount, "Cannot mine coin")
-    cvm.job_start()
-    with PostTxArgs(cvm.new_channel("COI")):
+    check_positive(amount, 'Cannot mine coin')
+    with PostTxArgs(cvm.new_channel('COI'), _get_all_channels()):
         _mine_coin(amount)
 
 @clientside
 def send(amount : int, recipient : KeyAlias) -> None:
     check_if_can_transfer(amount, recipient)
-    cvm.job_start()
-    with PostTxArgs(cvm.new_channel("COI")):
-        _mine_coin(amount)
+    with PostTxArgs(cvm.new_channel('COI'), _get_all_channels()):
+        _send(amount, recipient)
 
 #
 # Helper
@@ -38,6 +36,11 @@ def send(amount : int, recipient : KeyAlias) -> None:
 @helper
 def _get_all_transfers() -> List[Transfer]:
     return [row.value for row in cvm.storage.query(TransferStatic).execute()]
+
+@helper
+def _get_all_channels() -> List[ChannelName]:
+    channels : List[ChannelName] = [row.channel_name for row in cvm.storage.query(TransferStatic).execute()]
+    return std.set(channels, str) + [PUBLIC]
 
 @helper
 def _get_balance() -> int:
@@ -53,10 +56,10 @@ def check_positive(v : int, msg: str) -> None:
 
 @helper
 def check_if_can_transfer(amount : int, recipient : KeyAlias) -> None:
-    check_positive(amount, "Cannot send coin to" + str(recipient))
+    check_positive(amount, 'Cannot send coin to {recipient}')
     current_balance = _get_balance()
     if current_balance < amount:
-        cvm.error("Not enough coins on source account {cvm.tx.key_alias}. Balance: {balance}")
+        cvm.error(f'Not enough coins on source account {cvm.tx.key_alias}. Balance: {current_balance}')
 
 #
 # Executable
@@ -64,7 +67,7 @@ def check_if_can_transfer(amount : int, recipient : KeyAlias) -> None:
 
 @executable
 def _mine_coin(amount : int = 1) -> None:
-    check_positive(amount, "Cannot mine coin")
+    check_positive(amount, 'Cannot mine coin')
     id = cvm.generate_id('TSF')
     transfer = Transfer(
         id = id, 
@@ -72,7 +75,6 @@ def _mine_coin(amount : int = 1) -> None:
         destination = cvm.tx.key_alias, 
         amount = amount)
     cvm.storage.put(id, transfer)
-    cvm.job_complete(std.json(transfer))
 
 @executable
 def _send(amount : int, recipient : KeyAlias) -> None:
@@ -81,11 +83,9 @@ def _send(amount : int, recipient : KeyAlias) -> None:
     id = cvm.generate_id('TSF')
     transfer = Transfer(
         id = id, 
-        source = cvm.tx.key_alias, 
+        source = cvm.tx.key_alias,
         destination = recipient, 
         amount = amount)
     cvm.storage.put(id, transfer)
-    cvm.job_complete(std.json(transfer))
-
 
 # vi:syntax=python

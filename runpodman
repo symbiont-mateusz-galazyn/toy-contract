@@ -1,21 +1,38 @@
 #!/usr/bin/env stack
 {- stack
 script
+--ghc-options -freverse-errors
+--ghc-options -fno-warn-tabs
 --resolver nightly-2022-05-29
---package shell-conduit
---package yaml
+--package aeson
 --package bytestring
+--package conduit
 --package interpolatedstring-perl6
+--package mtl
+--package shell-conduit
+--package string-conv
+--package transformers
+--package unliftio-core
+--package yaml
 -}
+{-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-import Control.Monad.IO.Class (MonadIO, liftIO)
-import qualified Data.ByteString as B
+import Control.Concurrent (threadDelay)
+import Control.Exception (assert)
+import Control.Monad.IO.Unlift (MonadUnliftIO)
+import Control.Monad.Reader
+import Data.Aeson
+import Data.Aeson.Types
+import Data.Conduit
 import Data.Conduit.Shell
+import Data.Conduit.Shell.Segments
+import Data.String.Conv (toS)
 import GHC.Generics (Generic)
-import Data.Yaml (FromJSON, decodeFileThrow)
+import Data.Yaml (decodeFileThrow)
 import System.Environment
 import System.Exit (exitFailure)
 import Text.InterpolatedString.Perl6 (qc)
@@ -73,31 +90,80 @@ main = getArgs >>= \case
 
   -- {{{ contract functions
 
-  ["c-mine-coin"] -> run $ callContractF "mine_coin" "{}"
+  ["c-mine-coin"] -> run (mineCoin $| jq)
 
-  ["c-get-all-transfers"] -> run $ callContractF "get_all_transfers" "{}"
+  ["c-get-all-transfers"] -> run (getAllTransfers $| jq)
 
-  ["c-get-balance"] -> run $ callContractF "get_balance" "{}"
+  ["c-get-balance"] -> run (getBalance $| jq)
 
-  ["c-send", recipient, amountStr] -> run $ do
-    callContractF "send" [qc| \{ "amount": {amountStr}, "recipient": "{recipient}" \}|]
+  ["c-send", recipient, amountStr] -> run (send recipient (read amountStr) $| jq)
+
+  -- }}}
+
+  -- {{{ test cases
+
+  ["t-validate-transfer"] -> do
+    [newKeyAlias1] <- run (strings createKa)
+    [newKeyAlias2] <- run (strings createKa)
+    putStrLn $ "new KAs: " <> show [newKeyAlias1, newKeyAlias2]
+    runWithKA newKeyAlias1 $ do
+      mineCoin $| jq
+      send newKeyAlias2 1 $| jq
+
+    threadDelay 1_000_000 -- wait to ensure transaction got processed
+
+    putStrLn $ "sending one coin from: " <> newKeyAlias1 <> " to: " <> newKeyAlias2
+    putStrLn "target transfers"
+    targetBalance <- fmap (parseBalanceJson . head) .runWithKA newKeyAlias2 $ do
+      getAllTransfers $| jq
+      strings $ getBalance
+
+    putStrLn "source transfers"
+    sourceBalance <- fmap (parseBalanceJson . head) . runWithKA newKeyAlias1 $ do
+      getAllTransfers $| jq
+      strings $ getBalance
+
+    putStrLn $ "Target balance after transfer: " <> show targetBalance
+    assert (targetBalance == 1) $ pure ()
+    putStrLn $ "Source balance after transfer: " <> show sourceBalance
+    assert (sourceBalance == 0) $ pure ()
 
   -- }}}
 
   args -> putStrLn ("unknown arguments: " <> show args) >> exitFailure
 
 
-createKa :: MonadIO m => Segment m ()
+mineCoin, getAllTransfers, getBalance :: (MonadUnliftIO m, HasKeyAlias (Segment m)) => Segment m ()
+mineCoin = callContractF "mine_coin" "{}"
+getAllTransfers = callContractF "get_all_transfers" "{}"
+getBalance = callContractF "get_balance" "{}"
+
+createKa :: MonadUnliftIO m => Segment m ()
 createKa = podman "exec" containerName "sym" "network" "create-ka"
 
-callContractF :: (MonadIO m) => String -> String -> Segment m ()
-callContractF functionName arguments = do
-  keyAlias <- liftIO $ getEnv "KA"
+send :: (MonadUnliftIO m, HasKeyAlias (Segment m)) => KeyAlias -> Int -> Segment m ()
+send recipient amount = callContractF "send" [qc|\{ "amount": {show amount}, "recipient": "{recipient}" }|]
+
+callContractF :: (MonadUnliftIO m, HasKeyAlias (Segment m)) => String -> String -> Segment m ()
+callContractF functionName payload = do
+  keyAlias <- getKa
   ContractMeta{name, version, language} <- getContractMeta
   podman "exec" containerName "curl" "-X" "POST" "-s" ("http://localhost:8888/api/v1/contracts/" <> name <> "/" <> (show language) <> "-" <> version <> "/" <> functionName)
       "-H" "Content-Type: application/json"
       "-H" ("Symbiont-Key-Alias: " <> keyAlias)
-      "-d" "{}"
+      "-d" payload
+
+parseBalanceJson :: String -> Int
+parseBalanceJson responseJson = 
+  let Just responseValue = decode' (toS responseJson) :: Maybe Value
+      Just (String balanceStr) :: Maybe Value = flip parseMaybe responseValue $
+        withObject "r1" $ \o -> do
+          v1 <- o .: "data"
+          withObject "r2" (.: "result") v1
+      in read (toS balanceStr)
+
+devNull :: Monad m => Segment m ()
+devNull = conduit (void await)
 
 -- {{{ Contract Metadata
 getContractMeta :: MonadIO m => m ContractMeta
@@ -109,5 +175,22 @@ data ContractMeta = ContractMeta
   , language :: Int
   } deriving (Show, Generic, FromJSON)
 -- }}}
+
+-- {{{ Key Alias reading
+type KeyAlias = String
+
+runWithKA :: MonadIO m => KeyAlias -> Segment (ReaderT KeyAlias m) a -> m a
+runWithKA keyAlias = flip runReaderT keyAlias . run
+
+class MonadIO m => HasKeyAlias m where
+  getKa :: m String
+
+instance HasKeyAlias (Segment IO) where
+  getKa = liftIO $ getEnv "KA"
+
+instance MonadIO m => HasKeyAlias (Segment (ReaderT KeyAlias m)) where
+  getKa = conduit (ask <* (yield mempty))
+
+--- }}}
 
 -- vim: set filetype=haskell:
