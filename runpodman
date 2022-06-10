@@ -44,7 +44,7 @@ containerName :: String
 containerName = "assembly-sdk"
 
 contractDir :: String
-contractDir = "workspace/tumbler"
+contractDir = "workspace/secretaccounts"
 
 main :: IO ()
 main = getArgs >>= \case
@@ -128,6 +128,31 @@ main = getArgs >>= \case
     putStrLn $ "Source balance after transfer: " <> show sourceBalance
     assert (sourceBalance == 0) $ pure ()
 
+  ["t-send-swap"] -> do
+    [newKeyAlias1] <- run (strings createKa)
+    [newKeyAlias2] <- run (strings createKa)
+    putStrLn $ "new KAs: " <> show [newKeyAlias1, newKeyAlias2]
+    runWithKA newKeyAlias1 $ do
+      mineCoin $| jq
+      swap newKeyAlias2 1 $| jq
+
+    threadDelay 1_000_000 -- wait to ensure transaction got processed
+
+    putStrLn $ "swapping one coin from: " <> newKeyAlias1 <> " to: " <> newKeyAlias2 <> " and back"
+    putStrLn "target transfers"
+    targetBalance <- fmap (parseBalanceJson . head) .runWithKA newKeyAlias2 $ do
+      getAllTransfers $| jq
+      strings $ getBalance
+
+    putStrLn "source transfers"
+    sourceBalance <- fmap (parseBalanceJson . head) . runWithKA newKeyAlias1 $ do
+      getAllTransfers $| jq
+      strings $ getBalance
+
+    putStrLn $ "Target balance after transfer: " <> show targetBalance
+    assert (targetBalance == 0) $ pure ()
+    putStrLn $ "Source balance after transfer: " <> show sourceBalance
+    assert (sourceBalance == 1) $ pure ()
   -- }}}
 
   args -> putStrLn ("unknown arguments: " <> show args) >> exitFailure
@@ -144,17 +169,21 @@ createKa = podman "exec" containerName "sym" "network" "create-ka"
 send :: (MonadUnliftIO m, HasKeyAlias (Segment m)) => KeyAlias -> Int -> Segment m ()
 send recipient amount = callContractF "send" [qc|\{ "amount": {show amount}, "recipient": "{recipient}" }|]
 
+swap :: (MonadUnliftIO m, HasKeyAlias (Segment m)) => KeyAlias -> Int -> Segment m ()
+swap recipient amount = callContractF "swap" [qc|\{ "amount": {show amount}, "recipient": "{recipient}" }|]
+
 callContractF :: (MonadUnliftIO m, HasKeyAlias (Segment m)) => String -> String -> Segment m ()
 callContractF functionName payload = do
   keyAlias <- getKa
   ContractMeta{name, version, language} <- getContractMeta
+  liftIO $ print name
   podman "exec" containerName "curl" "-X" "POST" "-s" ("http://localhost:8888/api/v1/contracts/" <> name <> "/" <> (show language) <> "-" <> version <> "/" <> functionName)
       "-H" "Content-Type: application/json"
       "-H" ("Symbiont-Key-Alias: " <> keyAlias)
       "-d" payload
 
 parseBalanceJson :: String -> Int
-parseBalanceJson responseJson = 
+parseBalanceJson responseJson =
   let Just responseValue = decode' (toS responseJson) :: Maybe Value
       Just (String balanceStr) :: Maybe Value = flip parseMaybe responseValue $
         withObject "r1" $ \o -> do
